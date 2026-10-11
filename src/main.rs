@@ -274,6 +274,7 @@ fn main() {
         Some("manifest") => println!("{}", manifest()),
         Some("sidecar") => { let _ = sidecar(); }
         Some("status") => println!("{}", status()),
+        Some("-h" | "--help" | "help") => println!("{}", status()),
         _ => {
             if args.is_empty() {
                 if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
