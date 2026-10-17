@@ -64,6 +64,17 @@ fn run(b: &str, args: &[String]) -> Result<String, String> {
     else { Err(format!("{b}: {}", String::from_utf8_lossy(&o.stderr).trim())) }
 }
 
+// xdotool exits 0 on unknown keys while warning on stderr — surface it.
+fn run_checked(b: &str, args: &[String]) -> Result<String, String> {
+    let o = Command::new(b).args(args).output().map_err(|e| format!("{b}: {e}"))?;
+    let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+    if !o.status.success() {
+        return Err(format!("{b}: {stderr}"));
+    }
+    if !stderr.is_empty() { return Err(stderr); }
+    Ok(String::from_utf8_lossy(&o.stdout).to_string())
+}
+
 fn shot(a: &Value) -> Result<Value, String> {
     let dir = state_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -189,7 +200,7 @@ fn key(a: &Value) -> Result<String, String> {
         };
         run("osascript", &["-e".into(), script])?;
     } else if have("xdotool") {
-        run("xdotool", &["key".into(), k.into()])?;
+        run_checked("xdotool", &["key".into(), k.into()])?;
     } else if have("wtype") && !k.contains('+') {
         run("wtype", &["-k".into(), k.into()])?;
     } else {
