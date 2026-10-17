@@ -248,6 +248,46 @@ fn status() -> String {
             else if have("xdotool") {"xdotool"} else if have("wtype") {"wtype"} else {"NONE"})
 }
 
+fn usage() -> String {
+    format!("desktop — screen control.\n  \
+        desktop status            backend probe\n  \
+        desktop windows           list visible windows\n  \
+        desktop shot [path]       screenshot → PNG path\n  \
+        desktop click <x> <y>     click coordinates\n  \
+        desktop type <text>       type at focus\n  \
+        desktop key <chord>       press key (ctrl+s, Return, alt+Tab)\n\n{}", status())
+}
+
+fn cli(argv: &[String]) -> Result<String, String> {
+    match argv.first().map(String::as_str) {
+        None | Some("status") => Ok(status()),
+        Some("windows") => windows(),
+        Some("shot") | Some("screenshot") => {
+            let a = match argv.get(1) { Some(p) => json!({"path": p}), None => json!({}) };
+            shot(&a).map(|v| v["content"].as_str().unwrap_or("done").to_string())
+        }
+        Some("click") => {
+            let (x, y) = (argv.get(1).and_then(|s| s.parse::<i64>().ok()),
+                          argv.get(2).and_then(|s| s.parse::<i64>().ok()));
+            match (x, y) {
+                (Some(x), Some(y)) => click(&json!({"x": x, "y": y})),
+                _ => Err("usage: desktop click <x> <y>".into()),
+            }
+        }
+        Some("type") => {
+            let text = argv[1..].join(" ");
+            if text.is_empty() { return Err("usage: desktop type <text>".into()); }
+            type_text(&json!({"text": text}))
+        }
+        Some("key") => {
+            let k = argv.get(1).ok_or("usage: desktop key <chord>")?;
+            key(&json!({"key": k}))
+        }
+        Some("-h" | "--help" | "help") => Ok(usage()),
+        Some(other) => Err(format!("unknown verb {other}\n{}", usage())),
+    }
+}
+
 fn sidecar() -> std::io::Result<()> {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
@@ -265,7 +305,12 @@ fn sidecar() -> std::io::Result<()> {
                     let mut r = tool(v["params"]["name"].as_str().unwrap_or(""), &v["params"]["args"]);
                     r["id"] = id; r
                 } else if method == "command/run" {
-                    json!({"id": id, "result": {"text": status()}})
+                    let argv: Vec<String> = v["params"]["argv"].as_array()
+                        .map(|a| a.iter().filter_map(Value::as_str)
+                            .map(str::to_string).collect())
+                        .unwrap_or_default();
+                    let text = cli(&argv).unwrap_or_else(|e| e);
+                    json!({"id": id, "result": {"text": text}})
                 } else {
                     json!({"id": id, "error": {"code": -32601,
                         "message": format!("method not found: {method}")}})
@@ -284,16 +329,17 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("manifest") => println!("{}", manifest()),
         Some("sidecar") => { let _ = sidecar(); }
-        Some("status") => println!("{}", status()),
-        Some("-h" | "--help" | "help") => println!("{}", status()),
         _ => {
             if args.is_empty() {
                 if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                    println!("{}", status()); return;
+                    println!("{}", usage()); return;
                 }
                 let _ = sidecar(); return;
             }
-            eprintln!("unknown verb"); std::process::exit(1);
+            match cli(&args) {
+                Ok(t) => println!("{t}"),
+                Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+            }
         }
     }
 }
