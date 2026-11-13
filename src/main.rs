@@ -40,6 +40,7 @@ fn manifest() -> Value {
              "parameters": {"type": "object", "properties": {}}},
         ],
         "commands": ["/desktop"], "subcommands": ["desktop"],
+        "command_descriptions": {"/desktop": "see and act on the desktop: screenshot, click, type"},
     })
 }
 
