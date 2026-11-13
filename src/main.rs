@@ -13,33 +13,34 @@ fn manifest() -> Value {
         "name": NAME, "display_name": "Desktop",
         "version": env!("CARGO_PKG_VERSION"), "protocol": "1.1",
         "tools": [
-            {"name": "desktop_shot",
+            {"name": "desktop_shot", "label": "Screenshot", "preview": "{path}",
              "description": "Screenshot the screen (or a region) to a PNG; returns the path — cat it to view.",
              "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"},
                 "x": {"type": "integer"}, "y": {"type": "integer"},
                 "w": {"type": "integer"}, "h": {"type": "integer"}}}},
-            {"name": "desktop_click",
+            {"name": "desktop_click", "label": "Clicked", "preview": "{x}, {y} · {button}",
              "description": "Click at screen coordinates (button: left|middle|right, clicks N).",
              "parameters": {"type": "object", "properties": {
                 "x": {"type": "integer"}, "y": {"type": "integer"},
                 "button": {"type": "string"}, "clicks": {"type": "integer"}},
              "required": ["x","y"]}},
-            {"name": "desktop_type",
+            {"name": "desktop_type", "label": "Typed", "preview": "{text|firstline} · {key}",
              "description": "Type text at the current focus, then optionally press keys (e.g. 'Return', 'ctrl+s').",
              "parameters": {"type": "object", "properties": {
                 "text": {"type": "string"},
                 "key": {"type": "string", "description": "optional key chord after typing"}},
              "required": ["text"]}},
-            {"name": "desktop_key",
+            {"name": "desktop_key", "label": "Pressed", "preview": "{key}",
              "description": "Press a key or chord (X11 syntax: 'ctrl+s', 'Return', 'alt+Tab').",
              "parameters": {"type": "object", "properties": {
                 "key": {"type": "string"}}, "required": ["key"]}},
-            {"name": "desktop_windows",
+            {"name": "desktop_windows", "label": "Listed windows",
              "description": "List visible windows (title — geometry) where the platform supports it.",
              "parameters": {"type": "object", "properties": {}}},
         ],
         "commands": ["/desktop"], "subcommands": ["desktop"],
+        "command_descriptions": {"/desktop": "see and act on the desktop: screenshot, click, type"},
     })
 }
 
@@ -94,6 +95,17 @@ fn run(b: &str, args: &[String]) -> Result<String, String> {
             String::from_utf8_lossy(&o.stderr).trim()
         ))
     }
+}
+
+// xdotool exits 0 on unknown keys while warning on stderr — surface it.
+fn run_checked(b: &str, args: &[String]) -> Result<String, String> {
+    let o = Command::new(b).args(args).output().map_err(|e| format!("{b}: {e}"))?;
+    let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+    if !o.status.success() {
+        return Err(format!("{b}: {stderr}"));
+    }
+    if !stderr.is_empty() { return Err(stderr); }
+    Ok(String::from_utf8_lossy(&o.stdout).to_string())
 }
 
 fn shot(a: &Value) -> Result<Value, String> {
@@ -289,7 +301,7 @@ fn key(a: &Value) -> Result<String, String> {
             };
         run("osascript", &["-e".into(), script])?;
     } else if have("xdotool") {
-        run("xdotool", &["key".into(), k.into()])?;
+        run_checked("xdotool", &["key".into(), k.into()])?;
     } else if have("wtype") && !k.contains('+') {
         run("wtype", &["-k".into(), k.into()])?;
     } else {
@@ -381,6 +393,46 @@ fn status() -> String {
     )
 }
 
+fn usage() -> String {
+    format!("desktop — screen control.\n  \
+        desktop status            backend probe\n  \
+        desktop windows           list visible windows\n  \
+        desktop shot [path]       screenshot → PNG path\n  \
+        desktop click <x> <y>     click coordinates\n  \
+        desktop type <text>       type at focus\n  \
+        desktop key <chord>       press key (ctrl+s, Return, alt+Tab)\n\n{}", status())
+}
+
+fn cli(argv: &[String]) -> Result<String, String> {
+    match argv.first().map(String::as_str) {
+        None | Some("status") => Ok(status()),
+        Some("windows") => windows(),
+        Some("shot") | Some("screenshot") => {
+            let a = match argv.get(1) { Some(p) => json!({"path": p}), None => json!({}) };
+            shot(&a).map(|v| v["content"].as_str().unwrap_or("done").to_string())
+        }
+        Some("click") => {
+            let (x, y) = (argv.get(1).and_then(|s| s.parse::<i64>().ok()),
+                          argv.get(2).and_then(|s| s.parse::<i64>().ok()));
+            match (x, y) {
+                (Some(x), Some(y)) => click(&json!({"x": x, "y": y})),
+                _ => Err("usage: desktop click <x> <y>".into()),
+            }
+        }
+        Some("type") => {
+            let text = argv[1..].join(" ");
+            if text.is_empty() { return Err("usage: desktop type <text>".into()); }
+            type_text(&json!({"text": text}))
+        }
+        Some("key") => {
+            let k = argv.get(1).ok_or("usage: desktop key <chord>")?;
+            key(&json!({"key": k}))
+        }
+        Some("-h" | "--help" | "help") => Ok(usage()),
+        Some(other) => Err(format!("unknown verb {other}\n{}", usage())),
+    }
+}
+
 fn sidecar() -> std::io::Result<()> {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
@@ -404,7 +456,12 @@ fn sidecar() -> std::io::Result<()> {
                     r["id"] = id;
                     r
                 } else if method == "command/run" {
-                    json!({"id": id, "result": {"text": status()}})
+                    let argv: Vec<String> = v["params"]["argv"].as_array()
+                        .map(|a| a.iter().filter_map(Value::as_str)
+                            .map(str::to_string).collect())
+                        .unwrap_or_default();
+                    let text = cli(&argv).unwrap_or_else(|e| e);
+                    json!({"id": id, "result": {"text": text}})
                 } else {
                     json!({"id": id, "error": {"code": -32601,
                         "message": format!("method not found: {method}")}})
@@ -425,9 +482,7 @@ fn main() {
     };
     match args.first().map(String::as_str) {
         Some("manifest") => println!("{}", manifest()),
-        Some("sidecar") => {
-            let _ = sidecar();
-        }
+        Some("sidecar") => { let _ = sidecar(); }
         Some("status") => println!("{}", status()),
         Some("-h" | "--help" | "help") => println!("{}", status()),
         _ => {
@@ -439,8 +494,10 @@ fn main() {
                 let _ = sidecar();
                 return;
             }
-            eprintln!("unknown verb");
-            std::process::exit(1);
+            match cli(&args) {
+                Ok(t) => println!("{t}"),
+                Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+            }
         }
     }
 }
