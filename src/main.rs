@@ -39,6 +39,7 @@ fn manifest() -> Value {
              "description": "List visible windows (title — geometry) where the platform supports it.",
              "parameters": {"type": "object", "properties": {}}},
         ],
+        "description": "see and control the desktop",
         "commands": ["/desktop"], "subcommands": ["desktop"],
         "command_descriptions": {"/desktop": "see and act on the desktop: screenshot, click, type"},
     })
@@ -99,12 +100,17 @@ fn run(b: &str, args: &[String]) -> Result<String, String> {
 
 // xdotool exits 0 on unknown keys while warning on stderr — surface it.
 fn run_checked(b: &str, args: &[String]) -> Result<String, String> {
-    let o = Command::new(b).args(args).output().map_err(|e| format!("{b}: {e}"))?;
+    let o = Command::new(b)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{b}: {e}"))?;
     let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
     if !o.status.success() {
         return Err(format!("{b}: {stderr}"));
     }
-    if !stderr.is_empty() { return Err(stderr); }
+    if !stderr.is_empty() {
+        return Err(stderr);
+    }
     Ok(String::from_utf8_lossy(&o.stdout).to_string())
 }
 
@@ -394,13 +400,16 @@ fn status() -> String {
 }
 
 fn usage() -> String {
-    format!("desktop — screen control.\n  \
+    format!(
+        "desktop — screen control.\n  \
         desktop status            backend probe\n  \
         desktop windows           list visible windows\n  \
         desktop shot [path]       screenshot → PNG path\n  \
         desktop click <x> <y>     click coordinates\n  \
         desktop type <text>       type at focus\n  \
-        desktop key <chord>       press key (ctrl+s, Return, alt+Tab)\n\n{}", status())
+        desktop key <chord>       press key (ctrl+s, Return, alt+Tab)\n\n{}",
+        status()
+    )
 }
 
 fn cli(argv: &[String]) -> Result<String, String> {
@@ -408,12 +417,17 @@ fn cli(argv: &[String]) -> Result<String, String> {
         None | Some("status") => Ok(status()),
         Some("windows") => windows(),
         Some("shot") | Some("screenshot") => {
-            let a = match argv.get(1) { Some(p) => json!({"path": p}), None => json!({}) };
+            let a = match argv.get(1) {
+                Some(p) => json!({"path": p}),
+                None => json!({}),
+            };
             shot(&a).map(|v| v["content"].as_str().unwrap_or("done").to_string())
         }
         Some("click") => {
-            let (x, y) = (argv.get(1).and_then(|s| s.parse::<i64>().ok()),
-                          argv.get(2).and_then(|s| s.parse::<i64>().ok()));
+            let (x, y) = (
+                argv.get(1).and_then(|s| s.parse::<i64>().ok()),
+                argv.get(2).and_then(|s| s.parse::<i64>().ok()),
+            );
             match (x, y) {
                 (Some(x), Some(y)) => click(&json!({"x": x, "y": y})),
                 _ => Err("usage: desktop click <x> <y>".into()),
@@ -421,7 +435,9 @@ fn cli(argv: &[String]) -> Result<String, String> {
         }
         Some("type") => {
             let text = argv[1..].join(" ");
-            if text.is_empty() { return Err("usage: desktop type <text>".into()); }
+            if text.is_empty() {
+                return Err("usage: desktop type <text>".into());
+            }
             type_text(&json!({"text": text}))
         }
         Some("key") => {
@@ -456,9 +472,14 @@ fn sidecar() -> std::io::Result<()> {
                     r["id"] = id;
                     r
                 } else if method == "command/run" {
-                    let argv: Vec<String> = v["params"]["argv"].as_array()
-                        .map(|a| a.iter().filter_map(Value::as_str)
-                            .map(str::to_string).collect())
+                    let argv: Vec<String> = v["params"]["argv"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect()
+                        })
                         .unwrap_or_default();
                     let text = cli(&argv).unwrap_or_else(|e| e);
                     json!({"id": id, "result": {"text": text}})
@@ -482,7 +503,9 @@ fn main() {
     };
     match args.first().map(String::as_str) {
         Some("manifest") => println!("{}", manifest()),
-        Some("sidecar") => { let _ = sidecar(); }
+        Some("sidecar") => {
+            let _ = sidecar();
+        }
         Some("status") => println!("{}", status()),
         Some("-h" | "--help" | "help") => println!("{}", status()),
         _ => {
@@ -496,7 +519,10 @@ fn main() {
             }
             match cli(&args) {
                 Ok(t) => println!("{t}"),
-                Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             }
         }
     }
